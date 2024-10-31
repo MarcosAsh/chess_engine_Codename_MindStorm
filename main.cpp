@@ -9,6 +9,8 @@ using namespace std;
 // Board constants
 const int BOARD_SIZE = 8;
 const uint64_t FILE_A = 0x0101010101010101ULL;
+const uint64_t FILE_B = 0x0202020202020202ULL; // New definition for FILE_B
+const uint64_t FILE_G = 0x4040404040404040ULL; // New definition for FILE_G
 const uint64_t FILE_H = 0x8080808080808080ULL;
 const uint64_t RANK_1 = 0x00000000000000FFULL;
 const uint64_t RANK_2 = 0x000000000000FF00ULL;
@@ -16,6 +18,7 @@ const uint64_t RANK_4 = 0x00000000FF000000ULL;
 const uint64_t RANK_5 = 0x000000FF00000000ULL;
 const uint64_t RANK_7 = 0x00FF000000000000ULL;
 const uint64_t RANK_8 = 0xFF00000000000000ULL;
+
 
 // Piece bitboards
 uint64_t whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing;
@@ -157,25 +160,48 @@ void updateEnPassantTarget(uint64_t moveFrom, uint64_t moveTo, bool isWhite) {
     }
 }
 
-// Check if a given square is attacked by the enemy pieces
+// Expanded function to check if a square is attacked by any enemy piece
 bool isSquareAttacked(uint64_t square, bool byWhite) {
-    // This function checks if a given square is attacked by enemy pieces.
-    // For simplicity, only checking pawn, rook, bishop, queen, and knight attacks
     uint64_t enemyPawns = byWhite ? whitePawns : blackPawns;
     uint64_t enemyKnights = byWhite ? whiteKnights : blackKnights;
-    uint64_t enemyRooksQueens = byWhite ? (whiteRooks | whiteQueens) : (blackRooks | blackQueens);
-    uint64_t enemyBishopsQueens = byWhite ? (whiteBishops | whiteQueens) : (blackBishops | blackQueens);
+    uint64_t enemyBishops = byWhite ? whiteBishops : blackBishops;
+    uint64_t enemyRooks = byWhite ? whiteRooks : blackRooks;
+    uint64_t enemyQueens = byWhite ? whiteQueens : blackQueens;
+    uint64_t enemyKing = byWhite ? whiteKing : blackKing;
 
-    // Check for pawn attacks (forward diagonals)
+    // Pawn attacks
     if (byWhite) {
-        if ((enemyPawns << 7) & ~FILE_H & square) return true;
-        if ((enemyPawns << 9) & ~FILE_A & square) return true;
+        if (((enemyPawns << 7) & ~FILE_H & square) || ((enemyPawns << 9) & ~FILE_A & square)) return true;
     } else {
-        if ((enemyPawns >> 7) & ~FILE_A & square) return true;
-        if ((enemyPawns >> 9) & ~FILE_H & square) return true;
+        if (((enemyPawns >> 7) & ~FILE_A & square) || ((enemyPawns >> 9) & ~FILE_H & square)) return true;
     }
-    // Knight, rook, bishop, and queen attacks
-    return false; // Extend to include other attacks
+
+    // Knight attacks
+    uint64_t knightAttacks = ((square << 17) & ~FILE_A) | ((square << 15) & ~FILE_H) |
+                             ((square << 10) & ~(FILE_A | FILE_B)) | ((square << 6) & ~(FILE_G | FILE_H)) |
+                             ((square >> 17) & ~FILE_H) | ((square >> 15) & ~FILE_A) |
+                             ((square >> 10) & ~(FILE_G | FILE_H)) | ((square >> 6) & ~(FILE_A | FILE_B));
+    if (enemyKnights & knightAttacks) return true;
+
+    // Bishop and Queen (diagonal) attacks
+    uint64_t diagonalMoves = slideMove(square, 9, allPieces & ~FILE_A) |
+                             slideMove(square, 7, allPieces & ~FILE_H) |
+                             slideMove(square, -9, allPieces & ~FILE_H) |
+                             slideMove(square, -7, allPieces & ~FILE_A);
+    if ((enemyBishops | enemyQueens) & diagonalMoves) return true;
+
+    // Rook and Queen (straight) attacks
+    uint64_t straightMoves = slideMove(square, 8, allPieces) | slideMove(square, -8, allPieces) |
+                             slideMove(square, 1, allPieces & ~FILE_A) | slideMove(square, -1, allPieces & ~FILE_H);
+    if ((enemyRooks | enemyQueens) & straightMoves) return true;
+
+    // King attacks
+    uint64_t kingAttacks = ((square << 8) | (square >> 8) | ((square & ~FILE_H) << 1) | ((square & ~FILE_A) >> 1) |
+                            ((square & ~FILE_H) << 9) | ((square & ~FILE_A) << 7) |
+                            ((square & ~FILE_H) >> 7) | ((square & ~FILE_A) >> 9));
+    if (enemyKing & kingAttacks) return true;
+
+    return false;
 }
 
 // Check if a move is legal by ensuring it doesn't leave the king in check
@@ -201,8 +227,152 @@ bool isMoveLegal(uint64_t fromSquare, uint64_t toSquare, bool isWhite, bool isEn
 
     return legal;
 }
+// Enhanced print function to display the board for players
+void printBoardForPlayers() {
+    cout << "\nCurrent Board:\n";
+    cout << "  a b c d e f g h\n +----------------+\n";
+    for (int rank = 7; rank >= 0; --rank) {
+        cout << rank + 1 << "| ";
+        for (int file = 0; file < 8; ++file) {
+            int square = rank * 8 + file;
+            uint64_t mask = 1ULL << square;
+            if (whitePawns & mask) cout << "P ";
+            else if (whiteKnights & mask) cout << "N ";
+            else if (whiteBishops & mask) cout << "B ";
+            else if (whiteRooks & mask) cout << "R ";
+            else if (whiteQueens & mask) cout << "Q ";
+            else if (whiteKing & mask) cout << "K ";
+            else if (blackPawns & mask) cout << "p ";
+            else if (blackKnights & mask) cout << "n ";
+            else if (blackBishops & mask) cout << "b ";
+            else if (blackRooks & mask) cout << "r ";
+            else if (blackQueens & mask) cout << "q ";
+            else if (blackKing & mask) cout << "k ";
+            else cout << ". ";
+        }
+        cout << "|\n";
+    }
+    cout << " +----------------+\n";
+}
+
+// Parse move input like "e2 e4" to bitboard squares
+pair<int, int> parseInput(const string& input) {
+    int fileFrom = input[0] - 'a';
+    int rankFrom = input[1] - '1';
+    int fileTo = input[3] - 'a';
+    int rankTo = input[4] - '1';
+
+    int fromSquare = rankFrom * 8 + fileFrom;
+    int toSquare = rankTo * 8 + fileTo;
+    return {fromSquare, toSquare};
+}
+
+// Function to check for checkmate or stalemate
+bool isCheckmateOrStalemate(bool isWhiteTurn) {
+    uint64_t king = isWhiteTurn ? whiteKing : blackKing;
+    bool kingInCheck = isSquareAttacked(king, !isWhiteTurn);
+
+    // Iterate over all pieces of the current player and try all possible moves
+    uint64_t pieces = isWhiteTurn ? whitePieces : blackPieces;
+    while (pieces) {
+        uint64_t piece = pieces & -pieces; // Isolate the least significant bit (current piece)
+        pieces &= pieces - 1;              // Remove the isolated piece from the set
+
+        // Try moving the piece to all possible destinations
+        for (int destination = 0; destination < 64; ++destination) {
+            uint64_t destinationBit = 1ULL << destination;
+            if (destinationBit & allPieces) continue;  // Skip if occupied by same color
+            if (!isMoveLegal(piece, destinationBit, isWhiteTurn)) continue;
+
+            // If a legal move is found, not checkmate or stalemate
+            return false;
+        }
+    }
+    // Return true if the king is in check (checkmate), false if not (stalemate)
+    return kingInCheck;
+}
+
+// Handle pawn promotion to a queen when reaching last rank
+void handlePawnPromotion(uint64_t toBit, uint64_t isWhiteTurn) {
+    if (isWhiteTurn && (toBit & RANK_8)) {
+        whitePawns ^= toBit;
+        whiteQueens |= toBit;
+    }else if(!isWhiteTurn && (toBit & RANK_1)) {
+        blackPawns ^= toBit;
+        blackQueens |= toBit;
+    }
+    whitePieces = whitePawns | whiteKnights | whiteBishops | whiteRooks | whiteQueens | whiteKing;
+    blackPieces = blackPawns | blackKnights | blackBishops | blackRooks | blackQueens | blackKing;
+    allPieces = whitePieces | blackPieces;
+}
+
+// Make the move if it is valid
+bool makeMove(int fromSquare, int toSquare, bool isWhiteTurn) {
+    uint64_t fromBit = 1ULL << fromSquare;
+    uint64_t toBit = 1ULL << toSquare;
+    uint64_t pieceSet = isWhiteTurn ? whitePieces : blackPieces;
+
+    if (pieceSet & fromBit) {
+        if (isMoveLegal(fromBit, toBit, isWhiteTurn)) {
+            if (isWhiteTurn) {
+                whitePieces ^= fromBit | toBit;
+                whitePawns &= ~fromBit;
+                whiteKnights &= ~fromBit;
+                whiteBishops &= ~fromBit;
+                whiteRooks &= ~fromBit;
+                whiteQueens &= ~fromBit;
+                whitePawns |= toBit;  // Update appropriate piece sets
+                handlePawnPromotion(toBit, isWhiteTurn);
+            } else {
+                blackPieces ^= fromBit | toBit;
+                blackPawns &= ~fromBit;
+                blackKnights &= ~fromBit;
+                blackBishops &= ~fromBit;
+                blackRooks &= ~fromBit;
+                blackQueens &= ~fromBit;
+                blackPawns |= toBit;  // Update appropriate piece sets
+                handlePawnPromotion(toBit, isWhiteTurn);
+            }
+            allPieces = whitePieces | blackPieces;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Main game loop
+void gameLoop() {
+    bool isWhiteTurn = true;
+    initializePosition();
+    printBoardForPlayers();
+
+    while (true) {
+        if (isCheckmateOrStalemate(isWhiteTurn)) {
+            cout << (isWhiteTurn ? "Black wins by checkmate!\n" : "White wins by checkmate!\n");
+            break;
+        }
+
+        cout << (isWhiteTurn ? "White's turn: " : "Black's turn: ");
+        string moveInput;
+        getline(cin, moveInput);
+
+        if (moveInput.size() != 5 || moveInput[2] != ' ') {
+            cout << "Invalid input format. Use format 'e2 e4'.\n";
+            continue;
+        }
+
+        auto [fromSquare, toSquare] = parseInput(moveInput);
+        if (makeMove(fromSquare, toSquare, isWhiteTurn)) {
+            printBoardForPlayers();
+            isWhiteTurn = !isWhiteTurn;
+        } else {
+            cout << "Invalid move. Try again.\n";
+        }
+    }
+}
 
 int main() {
-    initializePosition();
-    // Test code to verify castling and en passant legality
+    cout << "Welcome to Chess!\n";
+    gameLoop();
+    return 0;
 }
