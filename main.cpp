@@ -221,16 +221,22 @@ vector<uint64_t> generateKnightMoves(uint64_t knights, bool isWhite) {
     uint64_t potentialMoves;
 
     while (knights) {
+        // Isolate the least significant knight piece
         uint64_t knight = knights & -knights;
         knights &= knights - 1;
+
+        // Generate potential moves by shifting and masking
         potentialMoves = ((knight << 17) & ~FILE_A) | ((knight << 15) & ~FILE_H) |
                          ((knight << 10) & ~(FILE_A | FILE_B)) | ((knight << 6) & ~(FILE_G | FILE_H)) |
                          ((knight >> 17) & ~FILE_H) | ((knight >> 15) & ~FILE_A) |
                          ((knight >> 10) & ~(FILE_G | FILE_H)) | ((knight >> 6) & ~(FILE_A | FILE_B));
+
+        // Remove own pieces from potential moves and add to moves list
         moves.push_back(potentialMoves & ~targets);
     }
     return moves;
 }
+
 
 // Generate bishop moves (diagonals)
 vector<uint64_t> generateBishopMoves(uint64_t bishops, bool isWhite) {
