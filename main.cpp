@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 #include <algorithm>
+#include <limits>
+#include <stack>
 
 using namespace std;
 
@@ -549,7 +551,277 @@ int evaluatePosition() {
     return whiteScore - blackScore;
 }
 
-// Main game loop
+
+// Define a structure to hold board state information
+struct BoardState {
+    uint64_t whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing;
+    uint64_t blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKing;
+    uint64_t whitePieces, blackPieces, allPieces;
+    bool whiteKingsideCastle, whiteQueensideCastle;
+    bool blackKingsideCastle, blackQueensideCastle;
+    uint64_t enPassantTarget;
+};
+
+// Stack to store previous board states
+std::stack<BoardState> historyStack;
+
+// Function to save the current board state before making a move
+void saveBoardState() {
+    BoardState currentState = {
+        whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing,
+        blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKing,
+        whitePieces, blackPieces, allPieces,
+        whiteKingsideCastle, whiteQueensideCastle,
+        blackKingsideCastle, blackQueensideCastle,
+        enPassantTarget
+    };
+    historyStack.push(currentState);
+}
+
+// Function to undo the last move by restoring the previous board state
+void undoMove() {
+    if (!historyStack.empty()) {
+        BoardState lastState = historyStack.top();
+        historyStack.pop();
+
+        // Restore board pieces and other state information
+        whitePawns = lastState.whitePawns;
+        whiteKnights = lastState.whiteKnights;
+        whiteBishops = lastState.whiteBishops;
+        whiteRooks = lastState.whiteRooks;
+        whiteQueens = lastState.whiteQueens;
+        whiteKing = lastState.whiteKing;
+
+        blackPawns = lastState.blackPawns;
+        blackKnights = lastState.blackKnights;
+        blackBishops = lastState.blackBishops;
+        blackRooks = lastState.blackRooks;
+        blackQueens = lastState.blackQueens;
+        blackKing = lastState.blackKing;
+
+        whitePieces = lastState.whitePieces;
+        blackPieces = lastState.blackPieces;
+        allPieces = lastState.allPieces;
+
+        whiteKingsideCastle = lastState.whiteKingsideCastle;
+        whiteQueensideCastle = lastState.whiteQueensideCastle;
+        blackKingsideCastle = lastState.blackKingsideCastle;
+        blackQueensideCastle = lastState.blackQueensideCastle;
+
+        enPassantTarget = lastState.enPassantTarget;
+    }
+}
+
+
+// Define a function to get the maximum evaluation
+int max(int a, int b) {
+    return (a > b) ? a : b;
+}
+
+// Define a function to get the minimum evaluation
+int min(int a, int b) {
+    return (a < b) ? a : b;
+}
+
+// Recursive minimax function with alpha-beta pruning
+int minimax(int depth, bool isMaximizingPlayer, int alpha, int beta, bool isWhiteTurn) {
+    // Base case: if depth is 0 or the game is over
+    if (depth == 0 || isCheckmateOrStalemate(isWhiteTurn)) {
+        return evaluatePosition();
+    }
+
+    if (isMaximizingPlayer) { // Maximizing for White
+        int maxEval = std::numeric_limits<int>::min();
+
+        // Generate all possible moves for White
+        uint64_t pieces = whitePieces;
+        while (pieces) {
+            uint64_t piece = pieces & -pieces;
+            pieces &= pieces - 1;
+
+            vector<uint64_t> legalMoves;
+            if (whitePawns & piece) legalMoves = generatePawnMoves(piece, true);
+            else if (whiteKnights & piece) legalMoves = generateKnightMoves(piece, true);
+            else if (whiteBishops & piece) legalMoves = generateBishopMoves(piece, true);
+            else if (whiteRooks & piece) legalMoves = generateRookMoves(piece, true);
+            else if (whiteQueens & piece) legalMoves = generateQueenMoves(piece, true);
+            else if (whiteKing & piece) legalMoves = generateKingMoves(piece, true);
+
+            // Try each move recursively
+            for (uint64_t move : legalMoves) {
+                // Make the move and evaluate recursively
+                makeMove(piece, move, true);
+                int eval = minimax(depth - 1, false, alpha, beta, false);
+                undoMove(); // You will need to implement undoMove() to revert the board
+
+                maxEval = max(maxEval, eval);
+                alpha = max(alpha, eval);
+
+                if (beta <= alpha) {
+                    break; // Beta cutoff
+                }
+            }
+        }
+        return maxEval;
+    } else { // Minimizing for Black
+        int minEval = std::numeric_limits<int>::max();
+
+        // Generate all possible moves for Black
+        uint64_t pieces = blackPieces;
+        while (pieces) {
+            uint64_t piece = pieces & -pieces;
+            pieces &= pieces - 1;
+
+            vector<uint64_t> legalMoves;
+            if (blackPawns & piece) legalMoves = generatePawnMoves(piece, false);
+            else if (blackKnights & piece) legalMoves = generateKnightMoves(piece, false);
+            else if (blackBishops & piece) legalMoves = generateBishopMoves(piece, false);
+            else if (blackRooks & piece) legalMoves = generateRookMoves(piece, false);
+            else if (blackQueens & piece) legalMoves = generateQueenMoves(piece, false);
+            else if (blackKing & piece) legalMoves = generateKingMoves(piece, false);
+
+            // Try each move recursively
+            for (uint64_t move : legalMoves) {
+                // Make the move and evaluate recursively
+                makeMove(piece, move, false);
+                int eval = minimax(depth - 1, true, alpha, beta, true);
+                undoMove(); // Revert the board after evaluation
+
+                minEval = min(minEval, eval);
+                beta = min(beta, eval);
+
+                if (beta <= alpha) {
+                    break; // Alpha cutoff
+                }
+            }
+        }
+        return minEval;
+    }
+}
+
+struct Move {
+    uint64_t from;
+    uint64_t to;
+    int evaluation;
+};
+
+// Function to find the best move for the computer
+Move findBestMove(bool isWhiteTurn, int depth = 4) {
+    Move bestMove;
+    int bestEval = isWhiteTurn ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
+
+    // Generate moves for all pieces
+    uint64_t pieces = isWhiteTurn ? whitePieces : blackPieces;
+
+    while (pieces) {
+        uint64_t piece = pieces & -pieces;
+        pieces &= pieces - 1;
+
+        vector<uint64_t> legalMoves;
+        // Generate moves based on piece type
+        if (isWhiteTurn) {
+            if (whitePawns & piece) {
+                legalMoves = generatePawnMoves(piece, true);
+                auto enPassantMoves = generateEnPassantMoves(piece, true);
+                legalMoves.insert(legalMoves.end(), enPassantMoves.begin(), enPassantMoves.end());
+            }
+            else if (whiteKnights & piece) legalMoves = generateKnightMoves(piece, true);
+            else if (whiteBishops & piece) legalMoves = generateBishopMoves(piece, true);
+            else if (whiteRooks & piece) legalMoves = generateRookMoves(piece, true);
+            else if (whiteQueens & piece) legalMoves = generateQueenMoves(piece, true);
+            else if (whiteKing & piece) legalMoves = generateKingMoves(piece, true);
+        } else {
+            if (blackPawns & piece) {
+                legalMoves = generatePawnMoves(piece, false);
+                auto enPassantMoves = generateEnPassantMoves(piece, false);
+                legalMoves.insert(legalMoves.end(), enPassantMoves.begin(), enPassantMoves.end());
+            }
+            else if (blackKnights & piece) legalMoves = generateKnightMoves(piece, false);
+            else if (blackBishops & piece) legalMoves = generateBishopMoves(piece, false);
+            else if (blackRooks & piece) legalMoves = generateRookMoves(piece, false);
+            else if (blackQueens & piece) legalMoves = generateQueenMoves(piece, false);
+            else if (blackKing & piece) legalMoves = generateKingMoves(piece, false);
+        }
+
+        // Try each move and evaluate
+        for (uint64_t move : legalMoves) {
+            if (!isMoveLegal(piece, move, isWhiteTurn)) continue;
+
+            // Save current state
+            saveBoardState();
+
+            // Make move
+            makeMove(piece, move, isWhiteTurn);
+
+            // Evaluate position using minimax
+            int eval = minimax(depth - 1, !isWhiteTurn,
+                             std::numeric_limits<int>::min(),
+                             std::numeric_limits<int>::max(),
+                             !isWhiteTurn);
+
+            // Restore position
+            undoMove();
+
+            // Update best move if better evaluation found
+            if (isWhiteTurn && eval > bestEval) {
+                bestEval = eval;
+                bestMove = {piece, move, eval};
+            } else if (!isWhiteTurn && eval < bestEval) {
+                bestEval = eval;
+                bestMove = {piece, move, eval};
+            }
+        }
+    }
+
+    return bestMove;
+}
+
+// Game loop for playing against the computer
+void computerGameLoop(bool humanPlaysWhite) {
+    bool isWhiteTurn = true;
+    initializePosition();
+    printBoardForPlayers();
+
+    while (true) {
+        if (isCheckmateOrStalemate(isWhiteTurn)) {
+            if (isSquareAttacked(isWhiteTurn ? whiteKing : blackKing, !isWhiteTurn)) {
+                cout << (isWhiteTurn ? "Black wins by checkmate!" : "White wins by checkmate!") << endl;
+            } else {
+                cout << "Stalemate! The game is a draw." << endl;
+            }
+            break;
+        }
+
+        if ((isWhiteTurn && humanPlaysWhite) || (!isWhiteTurn && !humanPlaysWhite)) {
+            // Human move
+            cout << (isWhiteTurn ? "White's turn: " : "Black's turn: ");
+            string moveInput;
+            getline(cin, moveInput);
+
+            if (moveInput.size() != 5 || moveInput[2] != ' ') {
+                cout << "Invalid input format. Use format 'e2 e4'.\n";
+                continue;
+            }
+
+            auto [fromSquare, toSquare] = parseInput(moveInput);
+            if (!makeMove(fromSquare, toSquare, isWhiteTurn)) {
+                cout << "Invalid move. Try again.\n";
+                continue;
+            }
+        } else {
+            // Computer move
+            cout << "Computer is thinking...\n";
+            Move bestMove = findBestMove(isWhiteTurn);
+            makeMove(bestMove.from, bestMove.to, isWhiteTurn);
+            cout << "Computer evaluation: " << bestMove.evaluation << endl;
+        }
+
+        printBoardForPlayers();
+        isWhiteTurn = !isWhiteTurn;
+    }
+}
+
+// Game loop for human vs. human gameplay
 void gameLoop() {
     bool isWhiteTurn = true;
     initializePosition();
@@ -562,7 +834,7 @@ void gameLoop() {
             } else {
                 cout << "Stalemate! The game is a draw." << endl;
             }
-            break;  // End the game
+            break;
         }
 
         // Display turn and take input
@@ -570,13 +842,11 @@ void gameLoop() {
         string moveInput;
         getline(cin, moveInput);
 
-        // Validate input format
         if (moveInput.size() != 5 || moveInput[2] != ' ') {
             cout << "Invalid input format. Use format 'e2 e4'.\n";
             continue;
         }
 
-        // Parse and make move
         auto [fromSquare, toSquare] = parseInput(moveInput);
         if (makeMove(fromSquare, toSquare, isWhiteTurn)) {
             printBoardForPlayers();
@@ -592,8 +862,26 @@ void gameLoop() {
 }
 
 
+
+// Main function to choose game mode
 int main() {
-    cout << "Welcome to Chess!\n";
-    gameLoop();
+    cout << "Welcome to Chess!\nChoose game mode:\n1. Human vs Human\n2. Human vs Computer\n";
+    int choice;
+    cin >> choice;
+    cin.ignore(); // To ignore the newline character left in the input buffer
+
+    if (choice == 1) {
+        gameLoop();
+    } else if (choice == 2) {
+        cout << "Do you want to play as White? (y/n): ";
+        char colorChoice;
+        cin >> colorChoice;
+        cin.ignore();
+        bool humanPlaysWhite = (colorChoice == 'y' || colorChoice == 'Y');
+        computerGameLoop(humanPlaysWhite);
+    } else {
+        cout << "Invalid choice. Exiting program.\n";
+    }
+
     return 0;
 }
