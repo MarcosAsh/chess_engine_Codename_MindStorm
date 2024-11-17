@@ -5,14 +5,16 @@
 #include <algorithm>
 #include <limits>
 #include <stack>
+#include <random>
+#include <unordered_map>
 
 using namespace std;
 
 // Board constants
 const int BOARD_SIZE = 8;
 const uint64_t FILE_A = 0x0101010101010101ULL;
-const uint64_t FILE_B = 0x0202020202020202ULL; // New definition for FILE_B
-const uint64_t FILE_G = 0x4040404040404040ULL; // New definition for FILE_G
+const uint64_t FILE_B = 0x0202020202020202ULL;
+const uint64_t FILE_G = 0x4040404040404040ULL;
 const uint64_t FILE_H = 0x8080808080808080ULL;
 const uint64_t RANK_1 = 0x00000000000000FFULL;
 const uint64_t RANK_2 = 0x000000000000FF00ULL;
@@ -20,7 +22,6 @@ const uint64_t RANK_4 = 0x00000000FF000000ULL;
 const uint64_t RANK_5 = 0x000000FF00000000ULL;
 const uint64_t RANK_7 = 0x00FF000000000000ULL;
 const uint64_t RANK_8 = 0xFF00000000000000ULL;
-
 
 // Piece bitboards
 uint64_t whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing;
@@ -34,21 +35,38 @@ bool blackKingsideCastle = true, blackQueensideCastle = true;
 // En passant target square
 uint64_t enPassantTarget = 0;
 
+stack<uint64_t> zobristHistory; // For undoing Zobrist hashes efficiently
+uint64_t zobristTable[12][64];  // Randomized Zobrist keys for hashing
+unordered_map<uint64_t, int> transpositionTable;
+
+// Initialize Zobrist hashing
+void initializeZobrist() {
+    random_device rd;
+    mt19937_64 gen(rd());
+    uniform_int_distribution<uint64_t> dist(0, UINT64_MAX);
+
+    for (int piece = 0; piece < 12; ++piece) {
+        for (int square = 0; square < 64; ++square) {
+            zobristTable[piece][square] = dist(gen);
+        }
+    }
+}
+
 // Initialize board position
 void initializePosition() {
-    whitePawns   = 0x000000000000FF00ULL;
+    whitePawns = 0x000000000000FF00ULL;
     whiteKnights = 0x0000000000000042ULL;
     whiteBishops = 0x0000000000000024ULL;
-    whiteRooks   = 0x0000000000000081ULL;
-    whiteQueens  = 0x0000000000000008ULL;
-    whiteKing    = 0x0000000000000010ULL;
+    whiteRooks = 0x0000000000000081ULL;
+    whiteQueens = 0x0000000000000008ULL;
+    whiteKing = 0x0000000000000010ULL;
 
-    blackPawns   = 0x00FF000000000000ULL;
+    blackPawns = 0x00FF000000000000ULL;
     blackKnights = 0x4200000000000000ULL;
     blackBishops = 0x2400000000000000ULL;
-    blackRooks   = 0x8100000000000000ULL;
-    blackQueens  = 0x0800000000000000ULL;
-    blackKing    = 0x1000000000000000ULL;
+    blackRooks = 0x8100000000000000ULL;
+    blackQueens = 0x0800000000000000ULL;
+    blackKing = 0x1000000000000000ULL;
 
     whitePieces = whitePawns | whiteKnights | whiteBishops | whiteRooks | whiteQueens | whiteKing;
     blackPieces = blackPawns | blackKnights | blackBishops | blackRooks | blackQueens | blackKing;
@@ -57,6 +75,9 @@ void initializePosition() {
     whiteKingsideCastle = whiteQueensideCastle = true;
     blackKingsideCastle = blackQueensideCastle = true;
     enPassantTarget = 0;
+
+    // Initialize Zobrist hash for the initial position
+    zobristHistory.push(0); // Push an initial Zobrist hash (to be calculated dynamically)
 }
 
 // Helper to print bitboards for testing (just for testing)
@@ -72,6 +93,7 @@ void printBitboard(uint64_t bitboard) {
     }
     cout << " +----------------+\n";
 }
+
 
 // Sliding piece moves (rooks and bishops), with blockers
 uint64_t slideMove(uint64_t piece, int direction, uint64_t blockers) {
@@ -131,7 +153,9 @@ bool isSquareAttacked(uint64_t square, bool byWhite) {
 
 // Function to check if a move is legal
 bool isMoveLegal(uint64_t fromSquare, uint64_t toSquare, bool isWhite) {
-    uint64_t savedWhitePieces = whitePieces, savedBlackPieces = blackPieces, savedAllPieces = allPieces;
+    uint64_t savedWhitePieces = whitePieces;
+    uint64_t savedBlackPieces = blackPieces;
+    uint64_t savedAllPieces = allPieces;
     uint64_t king = isWhite ? whiteKing : blackKing;
 
     // Make the move temporarily to check for king safety
@@ -143,14 +167,19 @@ bool isMoveLegal(uint64_t fromSquare, uint64_t toSquare, bool isWhite) {
         allPieces = whitePieces | blackPieces;
     }
 
-    bool legal = !isSquareAttacked(king, !isWhite);
+    // Check if king is attacked after the move
+    bool kingInCheck = isSquareAttacked(king, !isWhite);
 
-    // Restore pieces to original positions
+    // Restore original positions
     whitePieces = savedWhitePieces;
     blackPieces = savedBlackPieces;
     allPieces = savedAllPieces;
 
-    return legal;
+    if (kingInCheck) {
+        cout << "Move from " << fromSquare << " to " << toSquare << " is illegal: leaves king in check.\n";
+    }
+
+    return !kingInCheck;
 }
 
 // Enhanced print function to display the board for players
@@ -186,32 +215,21 @@ vector<uint64_t> generatePawnMoves(uint64_t pawns, bool isWhite) {
     uint64_t singleStep, doubleStep, attacksLeft, attacksRight;
 
     if (isWhite) {
-        // Single move forward if empty
         singleStep = (pawns << 8) & ~allPieces;
-
-        // Double move forward only from rank 2 and if both squares are empty
         doubleStep = ((pawns & RANK_2) << 16) & ~allPieces & ~(allPieces << 8);
-
-        // Capture moves: diagonal left and right
-        attacksLeft = (pawns << 7) & blackPieces & ~FILE_H;  // Only if there's a black piece to the left
-        attacksRight = (pawns << 9) & blackPieces & ~FILE_A; // Only if there's a black piece to the right
+        attacksLeft = (pawns << 7) & blackPieces & ~FILE_H;
+        attacksRight = (pawns << 9) & blackPieces & ~FILE_A;
     } else {
-        // Single move forward if empty
         singleStep = (pawns >> 8) & ~allPieces;
-
-        // Double move forward only from rank 7 and if both squares are empty
         doubleStep = ((pawns & RANK_7) >> 16) & ~allPieces & ~(allPieces >> 8);
-
-        // Capture moves: diagonal left and right
-        attacksLeft = (pawns >> 7) & whitePieces & ~FILE_A;  // Only if there's a white piece to the left
-        attacksRight = (pawns >> 9) & whitePieces & ~FILE_H; // Only if there's a white piece to the right
+        attacksLeft = (pawns >> 7) & whitePieces & ~FILE_A;
+        attacksRight = (pawns >> 9) & whitePieces & ~FILE_H;
     }
 
-    // Add moves to the list
     if (singleStep) moves.push_back(singleStep);
-    if (doubleStep) moves.push_back(doubleStep);  // Only add double-step if valid
-    if (attacksLeft) moves.push_back(attacksLeft);  // Only add if capture is possible
-    if (attacksRight) moves.push_back(attacksRight); // Only add if capture is possible
+    if (doubleStep) moves.push_back(doubleStep);
+    if (attacksLeft) moves.push_back(attacksLeft);
+    if (attacksRight) moves.push_back(attacksRight);
 
     return moves;
 }
@@ -865,6 +883,9 @@ void gameLoop() {
 
 // Main function to choose game mode
 int main() {
+    initializeZobrist();
+    initializePosition();
+    printBitboard(whitePawns);
     cout << "Welcome to Chess!\nChoose game mode:\n1. Human vs Human\n2. Human vs Computer\n";
     int choice;
     cin >> choice;
