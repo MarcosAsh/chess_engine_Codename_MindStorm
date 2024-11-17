@@ -725,10 +725,7 @@ struct Move {
 
 // Function to find the best move for the computer
 Move findBestMove(bool isWhiteTurn, int depth = 4) {
-    Move bestMove;
-    int bestEval = isWhiteTurn ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
-
-    // Generate moves for all pieces
+    Move bestMove = {0, 0, isWhiteTurn ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max()};
     uint64_t pieces = isWhiteTurn ? whitePieces : blackPieces;
 
     while (pieces) {
@@ -736,24 +733,15 @@ Move findBestMove(bool isWhiteTurn, int depth = 4) {
         pieces &= pieces - 1;
 
         vector<uint64_t> legalMoves;
-        // Generate moves based on piece type
         if (isWhiteTurn) {
-            if (whitePawns & piece) {
-                legalMoves = generatePawnMoves(piece, true);
-                auto enPassantMoves = generateEnPassantMoves(piece, true);
-                legalMoves.insert(legalMoves.end(), enPassantMoves.begin(), enPassantMoves.end());
-            }
+            if (whitePawns & piece) legalMoves = generatePawnMoves(piece, true);
             else if (whiteKnights & piece) legalMoves = generateKnightMoves(piece, true);
             else if (whiteBishops & piece) legalMoves = generateBishopMoves(piece, true);
             else if (whiteRooks & piece) legalMoves = generateRookMoves(piece, true);
             else if (whiteQueens & piece) legalMoves = generateQueenMoves(piece, true);
             else if (whiteKing & piece) legalMoves = generateKingMoves(piece, true);
         } else {
-            if (blackPawns & piece) {
-                legalMoves = generatePawnMoves(piece, false);
-                auto enPassantMoves = generateEnPassantMoves(piece, false);
-                legalMoves.insert(legalMoves.end(), enPassantMoves.begin(), enPassantMoves.end());
-            }
+            if (blackPawns & piece) legalMoves = generatePawnMoves(piece, false);
             else if (blackKnights & piece) legalMoves = generateKnightMoves(piece, false);
             else if (blackBishops & piece) legalMoves = generateBishopMoves(piece, false);
             else if (blackRooks & piece) legalMoves = generateRookMoves(piece, false);
@@ -761,38 +749,28 @@ Move findBestMove(bool isWhiteTurn, int depth = 4) {
             else if (blackKing & piece) legalMoves = generateKingMoves(piece, false);
         }
 
-        // Try each move and evaluate
         for (uint64_t move : legalMoves) {
             if (!isMoveLegal(piece, move, isWhiteTurn)) continue;
 
-            // Save current state
             saveBoardState();
-
-            // Make move
             makeMove(piece, move, isWhiteTurn);
 
-            // Evaluate position using minimax
-            int eval = minimax(depth - 1, !isWhiteTurn,
-                             std::numeric_limits<int>::min(),
-                             std::numeric_limits<int>::max(),
-                             !isWhiteTurn);
-
-            // Restore position
+            int eval = minimax(depth - 1, !isWhiteTurn, std::numeric_limits<int>::min(), std::numeric_limits<int>::max(), !isWhiteTurn);
             undoMove();
 
-            // Update best move if better evaluation found
-            if (isWhiteTurn && eval > bestEval) {
-                bestEval = eval;
-                bestMove = {piece, move, eval};
-            } else if (!isWhiteTurn && eval < bestEval) {
-                bestEval = eval;
+            if ((isWhiteTurn && eval > bestMove.evaluation) || (!isWhiteTurn && eval < bestMove.evaluation)) {
                 bestMove = {piece, move, eval};
             }
         }
     }
 
+    // Ensure bestMove is valid
+    if (bestMove.from == 0 && bestMove.to == 0) {
+        cout << "No legal moves available for " << (isWhiteTurn ? "White" : "Black") << ".\n";
+    }
     return bestMove;
 }
+
 
 // Game loop for playing against the computer
 void computerGameLoop(bool humanPlaysWhite) {
