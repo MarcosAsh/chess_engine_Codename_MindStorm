@@ -37,7 +37,7 @@ uint64_t enPassantTarget = 0;
 
 stack<uint64_t> zobristHistory; // For undoing Zobrist hashes efficiently
 uint64_t zobristTable[12][64];  // Randomized Zobrist keys for hashing
-unordered_map<uint64_t, int> transpositionTable;
+unordered_map<uint64_t, pair<int, int>> transpositionTable;
 
 // Initialize Zobrist hashing
 void initializeZobrist() {
@@ -79,6 +79,7 @@ void initializePosition() {
     // Initialize Zobrist hash for the initial position
     zobristHistory.push(0); // Push an initial Zobrist hash (to be calculated dynamically)
 }
+
 
 // Helper to print bitboards for testing (just for testing)
 void printBitboard(uint64_t bitboard) {
@@ -575,26 +576,43 @@ struct BoardState {
     uint64_t whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing;
     uint64_t blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKing;
     uint64_t whitePieces, blackPieces, allPieces;
+    uint64_t enPassantTarget;
     bool whiteKingsideCastle, whiteQueensideCastle;
     bool blackKingsideCastle, blackQueensideCastle;
-    uint64_t enPassantTarget;
+    bool isWhiteTurn;
 };
+
+
+
+void cachePosition(uint64_t zobristHash, int evaluation, int depth) {
+    transpositionTable[zobristHash] = make_pair(depth, evaluation);
+}
+
+int lookupTransposition(uint64_t zobristHash) {
+    if (transpositionTable.count(zobristHash)) {
+        return transpositionTable[zobristHash].second; // Return the evaluation part
+    }
+    return std::numeric_limits<int>::min();
+}
+
 
 // Stack to store previous board states
 std::stack<BoardState> historyStack;
 
 // Function to save the current board state before making a move
-void saveBoardState() {
+void saveBoardState(bool isWhiteTurn) {
     BoardState currentState = {
         whitePawns, whiteKnights, whiteBishops, whiteRooks, whiteQueens, whiteKing,
         blackPawns, blackKnights, blackBishops, blackRooks, blackQueens, blackKing,
         whitePieces, blackPieces, allPieces,
+        enPassantTarget,
         whiteKingsideCastle, whiteQueensideCastle,
         blackKingsideCastle, blackQueensideCastle,
-        enPassantTarget
+        isWhiteTurn // Capture the turn information
     };
     historyStack.push(currentState);
 }
+
 
 // Function to undo the last move by restoring the previous board state
 void undoMove() {
@@ -640,82 +658,117 @@ int max(int a, int b) {
 int min(int a, int b) {
     return (a < b) ? a : b;
 }
+bool isCapture(uint64_t move, bool isWhiteTurn) {
+    uint64_t targetSquare = move; // Assume `move` encodes the target square
+    uint64_t opponentPieces = isWhiteTurn ? blackPieces : whitePieces;
+    return targetSquare & opponentPieces;
+}
+
+bool isCheck(uint64_t move, bool isWhiteTurn) {
+    saveBoardState(isWhiteTurn);
+    makeMove(move, move, isWhiteTurn);
+
+    uint64_t king = isWhiteTurn ? blackKing : whiteKing;
+    bool result = isSquareAttacked(king, !isWhiteTurn);
+
+    undoMove(); // Revert to the original state
+    return result;
+}
+
+int movePriority(uint64_t move, bool isWhiteTurn) {
+    int priority = 0;
+    if (isCapture(move, isWhiteTurn)) {
+        priority += 100; // High priority for captures
+    }
+    if (isCheck(move, isWhiteTurn)) {
+        priority += 50; // Moderate priority for checks
+    }
+    return priority;
+}
 
 // Recursive minimax function with alpha-beta pruning
 int minimax(int depth, bool isMaximizingPlayer, int alpha, int beta, bool isWhiteTurn) {
+    uint64_t zobristHash = zobristHistory.top(); // Retrieve current Zobrist hash
+
+    // Check transposition table
+    if (transpositionTable.count(zobristHash)) {
+        auto [storedDepth, storedEval] = transpositionTable[zobristHash];
+        if (storedDepth >= depth) {
+            return storedEval; // Use cached evaluation
+        }
+    }
+
     // Base case: if depth is 0 or the game is over
     if (depth == 0 || isCheckmateOrStalemate(isWhiteTurn)) {
         return evaluatePosition();
     }
 
-    if (isMaximizingPlayer) { // Maximizing for White
-        int maxEval = std::numeric_limits<int>::min();
+    vector<uint64_t> legalMoves;
+    int bestEval = isMaximizingPlayer ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
 
-        // Generate all possible moves for White
-        uint64_t pieces = whitePieces;
-        while (pieces) {
-            uint64_t piece = pieces & -pieces;
-            pieces &= pieces - 1;
+    // Generate all moves for the current player
+    uint64_t pieces = isWhiteTurn ? whitePieces : blackPieces;
+    while (pieces) {
+        uint64_t piece = pieces & -pieces; // Isolate least significant bit
+        pieces &= pieces - 1;
 
-            vector<uint64_t> legalMoves;
+        if (isWhiteTurn) {
             if (whitePawns & piece) legalMoves = generatePawnMoves(piece, true);
             else if (whiteKnights & piece) legalMoves = generateKnightMoves(piece, true);
             else if (whiteBishops & piece) legalMoves = generateBishopMoves(piece, true);
             else if (whiteRooks & piece) legalMoves = generateRookMoves(piece, true);
             else if (whiteQueens & piece) legalMoves = generateQueenMoves(piece, true);
             else if (whiteKing & piece) legalMoves = generateKingMoves(piece, true);
-
-            // Try each move recursively
-            for (uint64_t move : legalMoves) {
-                // Make the move and evaluate recursively
-                makeMove(piece, move, true);
-                int eval = minimax(depth - 1, false, alpha, beta, false);
-                undoMove(); // You will need to implement undoMove() to revert the board
-
-                maxEval = max(maxEval, eval);
-                alpha = max(alpha, eval);
-
-                if (beta <= alpha) {
-                    break; // Beta cutoff
-                }
-            }
-        }
-        return maxEval;
-    } else { // Minimizing for Black
-        int minEval = std::numeric_limits<int>::max();
-
-        // Generate all possible moves for Black
-        uint64_t pieces = blackPieces;
-        while (pieces) {
-            uint64_t piece = pieces & -pieces;
-            pieces &= pieces - 1;
-
-            vector<uint64_t> legalMoves;
+        } else {
             if (blackPawns & piece) legalMoves = generatePawnMoves(piece, false);
             else if (blackKnights & piece) legalMoves = generateKnightMoves(piece, false);
             else if (blackBishops & piece) legalMoves = generateBishopMoves(piece, false);
             else if (blackRooks & piece) legalMoves = generateRookMoves(piece, false);
             else if (blackQueens & piece) legalMoves = generateQueenMoves(piece, false);
             else if (blackKing & piece) legalMoves = generateKingMoves(piece, false);
+        }
 
-            // Try each move recursively
-            for (uint64_t move : legalMoves) {
-                // Make the move and evaluate recursively
-                makeMove(piece, move, false);
-                int eval = minimax(depth - 1, true, alpha, beta, true);
-                undoMove(); // Revert the board after evaluation
+        // Move ordering: prioritize captures or checks
+        sort(legalMoves.begin(), legalMoves.end(), [isWhiteTurn](uint64_t a, uint64_t b) {
+            return movePriority(a, isWhiteTurn) > movePriority(b, isWhiteTurn);
+        });
 
-                minEval = min(minEval, eval);
+
+        for (uint64_t move : legalMoves) {
+            if (!isMoveLegal(piece, move, isWhiteTurn)) continue;
+
+            saveBoardState(isWhiteTurn);
+            makeMove(piece, move, isWhiteTurn);
+
+            int eval;
+            if (isMaximizingPlayer) {
+                eval = minimax(depth - 1, false, alpha, beta, !isWhiteTurn);
+                bestEval = max(bestEval, eval);
+                alpha = max(alpha, eval);
+            } else {
+                eval = minimax(depth - 1, true, alpha, beta, !isWhiteTurn);
+                bestEval = min(bestEval, eval);
                 beta = min(beta, eval);
+            }
 
-                if (beta <= alpha) {
-                    break; // Alpha cutoff
-                }
+            undoMove();
+
+            if (beta <= alpha) {
+                break; // Alpha-beta cutoff
             }
         }
-        return minEval;
     }
+
+    // Store result in transposition table
+    transpositionTable[zobristHash] = make_pair(depth, bestEval);
+
+
+    return bestEval;
 }
+
+
+
+
 
 struct Move {
     uint64_t from;
@@ -752,7 +805,7 @@ Move findBestMove(bool isWhiteTurn, int depth = 4) {
         for (uint64_t move : legalMoves) {
             if (!isMoveLegal(piece, move, isWhiteTurn)) continue;
 
-            saveBoardState();
+            saveBoardState(isWhiteTurn);
             makeMove(piece, move, isWhiteTurn);
 
             int eval = minimax(depth - 1, !isWhiteTurn, std::numeric_limits<int>::min(), std::numeric_limits<int>::max(), !isWhiteTurn);
@@ -799,7 +852,10 @@ void computerGameLoop(bool humanPlaysWhite) {
                 continue;
             }
 
-            auto [fromSquare, toSquare] = parseInput(moveInput);
+            pair<int, int> parsedMove = parseInput(moveInput);
+            int fromSquare = parsedMove.first;
+            int toSquare = parsedMove.second;
+
             if (!makeMove(fromSquare, toSquare, isWhiteTurn)) {
                 cout << "Invalid move. Try again.\n";
                 continue;
