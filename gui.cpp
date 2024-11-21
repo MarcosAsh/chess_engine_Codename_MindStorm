@@ -2,57 +2,80 @@
 #include <iostream>
 #include <vector>
 
-// Constants
-const int WINDOW_WIDTH = 800;
-const int WINDOW_HEIGHT = 800;
 const int TILE_SIZE = 100;
+const int BOARD_SIZE = 8;
 
-void drawChessboard(sf::RenderWindow& window) {
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 8; ++col) {
-            sf::RectangleShape square(sf::Vector2f(TILE_SIZE, TILE_SIZE));
-            square.setPosition(col * TILE_SIZE, row * TILE_SIZE);
-            square.setFillColor((row + col) % 2 == 0 ? sf::Color::White : sf::Color::Black);
-            window.draw(square);
-        }
-    }
+bool pieceSelected = false;
+sf::Vector2i selectedSquare(-1, -1); // Selected square
+
+// Dummy function to check valid moves
+bool isValidMove(sf::Vector2i from, sf::Vector2i to) {
+    // Example: Allow any move within the board for testing
+    return to.x >= 0 && to.x < BOARD_SIZE && to.y >= 0 && to.y < BOARD_SIZE;
 }
 
-void drawPiece(sf::RenderWindow& window, sf::Texture& texture, int row, int col) {
-    sf::Sprite piece(texture);
-    piece.setPosition(col * TILE_SIZE, row * TILE_SIZE);
-    piece.setScale(TILE_SIZE / 100.0f, TILE_SIZE / 100.0f); // Scale to fit tile size
-    window.draw(piece);
+void drawHighlights(sf::RenderWindow& window, sf::Vector2i selectedSquare) {
+    sf::CircleShape highlight(TILE_SIZE / 4);
+    highlight.setFillColor(sf::Color(255, 255, 0, 128)); // Semi-transparent yellow
+    highlight.setOrigin(TILE_SIZE / 4, TILE_SIZE / 4);
+
+    sf::Vector2f pos(selectedSquare.y * TILE_SIZE + TILE_SIZE / 2,
+                     selectedSquare.x * TILE_SIZE + TILE_SIZE / 2);
+    highlight.setPosition(pos);
+    window.draw(highlight);
 }
 
 int main() {
-    // Initialize window
-    sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "Chess Game");
-
-    // Load textures
-    sf::Texture whitePawnTexture;
-    if (!whitePawnTexture.loadFromFile("white_pawn.png")) {
-        std::cerr << "Failed to load piece texture!\n";
-        return 1;
-    }
+    sf::RenderWindow window(sf::VideoMode(TILE_SIZE * BOARD_SIZE, TILE_SIZE * BOARD_SIZE), "Chess Input Example");
 
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed)
                 window.close();
+
+            if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Left) {
+                // Get clicked square
+                sf::Vector2i mousePos = sf::Mouse::getPosition(window);
+                int row = mousePos.y / TILE_SIZE;
+                int col = mousePos.x / TILE_SIZE;
+
+                if (!pieceSelected) {
+                    // First click: select piece
+                    selectedSquare = sf::Vector2i(row, col);
+                    pieceSelected = true;
+                } else {
+                    // Second click: attempt move
+                    sf::Vector2i targetSquare(row, col);
+                    if (isValidMove(selectedSquare, targetSquare)) {
+                        std::cout << "Moved from (" << selectedSquare.x << ", " << selectedSquare.y << ") to ("
+                                  << targetSquare.x << ", " << targetSquare.y << ")\n";
+                        // Update board state here
+                    } else {
+                        std::cout << "Invalid move!\n";
+                    }
+                    pieceSelected = false; // Deselect after attempting a move
+                }
+            }
         }
 
-        // Clear window
         window.clear();
 
         // Draw chessboard
-        drawChessboard(window);
+        for (int row = 0; row < BOARD_SIZE; ++row) {
+            for (int col = 0; col < BOARD_SIZE; ++col) {
+                sf::RectangleShape square(sf::Vector2f(TILE_SIZE, TILE_SIZE));
+                square.setPosition(col * TILE_SIZE, row * TILE_SIZE);
+                square.setFillColor((row + col) % 2 == 0 ? sf::Color::White : sf::Color::Black);
+                window.draw(square);
+            }
+        }
 
-        // Draw a sample piece (e.g., white pawn at position (6, 4))
-        drawPiece(window, whitePawnTexture, 6, 4);
+        // Highlight selected piece
+        if (pieceSelected) {
+            drawHighlights(window, selectedSquare);
+        }
 
-        // Display window
         window.display();
     }
 
