@@ -100,13 +100,20 @@ void printBitboard(uint64_t bitboard) {
 uint64_t slideMove(uint64_t piece, int direction, uint64_t blockers) {
     uint64_t moves = 0;
     uint64_t temp = piece;
+
     while (temp) {
         temp = (direction > 0) ? (temp << direction) : (temp >> -direction);
-        if (temp & blockers) break;
+        if (temp & blockers) {  // Stop at blockers
+            moves |= temp;      // Include the blocker square for capture
+            break;
+        }
+        if ((temp & FILE_A) && (direction == -1 || direction == 7 || direction == -9)) break; // Prevent wrap from H to A
+        if ((temp & FILE_H) && (direction == 1 || direction == -7 || direction == 9)) break;  // Prevent wrap from A to H
         moves |= temp;
     }
     return moves;
 }
+
 
 // Expanded function to check if a square is attacked by any enemy piece
 bool isSquareAttacked(uint64_t square, bool byWhite) {
@@ -116,40 +123,60 @@ bool isSquareAttacked(uint64_t square, bool byWhite) {
     uint64_t enemyRooks = byWhite ? whiteRooks : blackRooks;
     uint64_t enemyQueens = byWhite ? whiteQueens : blackQueens;
     uint64_t enemyKing = byWhite ? whiteKing : blackKing;
+    uint64_t enemyPieces = byWhite ? whitePieces : blackPieces;
 
     // Pawn attacks
     if (byWhite) {
-        if (((enemyPawns << 7) & ~FILE_H & square) || ((enemyPawns << 9) & ~FILE_A & square)) return true;
+        if (((enemyPawns << 7) & ~FILE_H & square) || ((enemyPawns << 9) & ~FILE_A & square)) {
+            return true; // White Pawn attacking left or right
+        }
     } else {
-        if (((enemyPawns >> 7) & ~FILE_A & square) || ((enemyPawns >> 9) & ~FILE_H & square)) return true;
+        if (((enemyPawns >> 7) & ~FILE_A & square) || ((enemyPawns >> 9) & ~FILE_H & square)) {
+            return true; // Black Pawn attacking left or right
+        }
     }
 
     // Knight attacks
     uint64_t knightAttacks = ((square << 17) & ~FILE_A) | ((square << 15) & ~FILE_H) |
-                             ((square << 10) & ~(FILE_A | FILE_B)) | ((square << 6) & ~(FILE_G | FILE_H)) |
                              ((square >> 17) & ~FILE_H) | ((square >> 15) & ~FILE_A) |
-                             ((square >> 10) & ~(FILE_G | FILE_H)) | ((square >> 6) & ~(FILE_A | FILE_B));
+                             ((square << 10) & ~(FILE_A | FILE_B)) | ((square >> 10) & ~(FILE_H | FILE_G)) |
+                             ((square << 6) & ~(FILE_H | FILE_G)) | ((square >> 6) & ~(FILE_A | FILE_B));
     if (enemyKnights & knightAttacks) return true;
 
-    // Bishop and Queen (diagonal) attacks
-    uint64_t diagonalMoves = slideMove(square, 9, allPieces & ~FILE_A) |
-                             slideMove(square, 7, allPieces & ~FILE_H) |
-                             slideMove(square, -9, allPieces & ~FILE_H) |
-                             slideMove(square, -7, allPieces & ~FILE_A);
-    if ((enemyBishops | enemyQueens) & diagonalMoves) return true;
+    // Sliding piece attacks (bishops, rooks, queens)
+    uint64_t bishopAttacks = slideMove(square, 7, enemyPieces) | slideMove(square, 9, enemyPieces) |
+                             slideMove(square, -7, enemyPieces) | slideMove(square, -9, enemyPieces);
+    if (enemyBishops & bishopAttacks || enemyQueens & bishopAttacks) return true;
 
-    // Rook and Queen (straight) attacks
-    uint64_t straightMoves = slideMove(square, 8, allPieces) | slideMove(square, -8, allPieces) |
-                             slideMove(square, 1, allPieces & ~FILE_A) | slideMove(square, -1, allPieces & ~FILE_H);
-    if ((enemyRooks | enemyQueens) & straightMoves) return true;
+    uint64_t rookAttacks = slideMove(square, 1, enemyPieces) | slideMove(square, -1, enemyPieces) |
+                           slideMove(square, 8, enemyPieces) | slideMove(square, -8, enemyPieces);
+    if (enemyRooks & rookAttacks || enemyQueens & rookAttacks) return true;
 
     // King attacks
-    uint64_t kingAttacks = ((square << 8) | (square >> 8) | ((square & ~FILE_H) << 1) | ((square & ~FILE_A) >> 1) |
-                            ((square & ~FILE_H) << 9) | ((square & ~FILE_A) << 7) |
-                            ((square & ~FILE_H) >> 7) | ((square & ~FILE_A) >> 9));
+    uint64_t kingAttacks = (square << 8) | (square >> 8) |
+                           ((square << 1) & ~FILE_A) | ((square >> 1) & ~FILE_H) |
+                           ((square << 9) & ~FILE_A) | ((square >> 9) & ~FILE_H) |
+                           ((square << 7) & ~FILE_H) | ((square >> 7) & ~FILE_A);
     if (enemyKing & kingAttacks) return true;
 
     return false;
+}
+
+
+// Convert a square in bitboard format to chess notation (e.g., 1ULL << 0 -> "a1")
+string squareToNotation(uint64_t square) {
+    if (square == 0) {
+        return "null"; // Handle case where square is invalid
+    }
+
+    // Get the index of the square (position of the least significant bit)
+    int index = __builtin_ctzll(square); // Count trailing zeros (find the bit position)
+
+    // Convert the index into file (column) and rank (row)
+    char file = 'a' + (index % 8);      // Files are a-h (0-7 mod 8)
+    char rank = '1' + (index / 8);      // Ranks are 1-8 (0-7 div 8)
+
+    return string(1, file) + string(1, rank); // Combine file and rank into a single string
 }
 
 // Function to check if a move is legal
@@ -159,7 +186,7 @@ bool isMoveLegal(uint64_t fromSquare, uint64_t toSquare, bool isWhite) {
     uint64_t savedAllPieces = allPieces;
     uint64_t king = isWhite ? whiteKing : blackKing;
 
-    // Make the move temporarily to check for king safety
+    // Temporarily make the move
     if (isWhite) {
         whitePieces ^= fromSquare | toSquare;
         allPieces = whitePieces | blackPieces;
@@ -168,20 +195,23 @@ bool isMoveLegal(uint64_t fromSquare, uint64_t toSquare, bool isWhite) {
         allPieces = whitePieces | blackPieces;
     }
 
-    // Check if king is attacked after the move
+    // Check if the king is in check
     bool kingInCheck = isSquareAttacked(king, !isWhite);
+    if (kingInCheck) {
+        cout << "Move from " << squareToNotation(fromSquare) << " to " << squareToNotation(toSquare)
+             << " leaves king in check. Illegal.\n";
+    }
 
     // Restore original positions
     whitePieces = savedWhitePieces;
     blackPieces = savedBlackPieces;
     allPieces = savedAllPieces;
 
-    if (kingInCheck) {
-        cout << "Move from " << fromSquare << " to " << toSquare << " is illegal: leaves king in check.\n";
-    }
-
     return !kingInCheck;
 }
+
+
+
 
 // Enhanced print function to display the board for players
 void printBoardForPlayers() {
@@ -227,6 +257,14 @@ vector<uint64_t> generatePawnMoves(uint64_t pawns, bool isWhite) {
         attacksRight = (pawns >> 9) & whitePieces & ~FILE_H;
     }
 
+    // Debug output
+    cout << "Pawn moves generated: ";
+    if (singleStep) cout << singleStep << " ";
+    if (doubleStep) cout << doubleStep << " ";
+    if (attacksLeft) cout << attacksLeft << " ";
+    if (attacksRight) cout << attacksRight << " ";
+    cout << endl;
+
     if (singleStep) moves.push_back(singleStep);
     if (doubleStep) moves.push_back(doubleStep);
     if (attacksLeft) moves.push_back(attacksLeft);
@@ -234,6 +272,7 @@ vector<uint64_t> generatePawnMoves(uint64_t pawns, bool isWhite) {
 
     return moves;
 }
+
 
 // Generate knight moves
 vector<uint64_t> generateKnightMoves(uint64_t knights, bool isWhite) {
@@ -363,6 +402,8 @@ vector<uint64_t> generateEnPassantMoves(uint64_t pawns, bool isWhite) {
     return moves;
 }
 
+
+
 // Parse move input like "e2 e4" to bitboard squares
 pair<int, int> parseInput(const string& input) {
     int fileFrom = input[0] - 'a';
@@ -431,112 +472,78 @@ void handlePawnPromotion(uint64_t toBit, uint64_t isWhiteTurn) {
     allPieces = whitePieces | blackPieces;
 }
 
+
 // Main move function with updated castling and en passant checks
 bool makeMove(int fromSquare, int toSquare, bool isWhiteTurn) {
     uint64_t fromBit = 1ULL << fromSquare;
     uint64_t toBit = 1ULL << toSquare;
+
+    // Debug move attempt
+    cout << "Attempting move: " << squareToNotation(fromBit) << " -> " << squareToNotation(toBit) << "\n";
+
+    // Generate legal moves for the piece
     vector<uint64_t> legalMoves;
-
-    // Check castling rights and update if applicable
     if (isWhiteTurn) {
-        if ((whiteKing & fromBit) && (toSquare == fromSquare + 2) && canCastleKingside(true)) {
-            whiteKing = toBit;
-            whiteRooks ^= 0x80; // Update rook position for castling
-            whiteKingsideCastle = false;
-            whiteQueensideCastle = false;
-            return true;
-        } else if ((whiteKing & fromBit) && (toSquare == fromSquare - 2) && canCastleQueenside(true)) {
-            whiteKing = toBit;
-            whiteRooks ^= 0x1; // Update rook position for castling
-            whiteKingsideCastle = false;
-            whiteQueensideCastle = false;
-            return true;
-        }
-    } else {
-        if ((blackKing & fromBit) && (toSquare == fromSquare + 2) && canCastleKingside(false)) {
-            blackKing = toBit;
-            blackRooks ^= 0x8000000000000000; // Update rook position for castling
-            blackKingsideCastle = false;
-            blackQueensideCastle = false;
-            return true;
-        } else if ((blackKing & fromBit) && (toSquare == fromSquare - 2) && canCastleQueenside(false)) {
-            blackKing = toBit;
-            blackRooks ^= 0x100000000000000; // Update rook position for castling
-            blackKingsideCastle = false;
-            blackQueensideCastle = false;
-            return true;
-        }
-    }
-
-    // Generate legal moves for each piece type with en passant
-    if (isWhiteTurn) {
-        if (whitePawns & fromBit) {
-            legalMoves = generatePawnMoves(fromBit, true);
-            vector<uint64_t> enPassantMoves = generateEnPassantMoves(fromBit, true);
-            legalMoves.insert(legalMoves.end(), enPassantMoves.begin(), enPassantMoves.end());
-        } else if (whiteKnights & fromBit) legalMoves = generateKnightMoves(fromBit, true);
+        if (whitePawns & fromBit) legalMoves = generatePawnMoves(fromBit, true);
+        else if (whiteKnights & fromBit) legalMoves = generateKnightMoves(fromBit, true);
         else if (whiteBishops & fromBit) legalMoves = generateBishopMoves(fromBit, true);
         else if (whiteRooks & fromBit) legalMoves = generateRookMoves(fromBit, true);
         else if (whiteQueens & fromBit) legalMoves = generateQueenMoves(fromBit, true);
         else if (whiteKing & fromBit) legalMoves = generateKingMoves(fromBit, true);
     } else {
-        if (blackPawns & fromBit) {
-            legalMoves = generatePawnMoves(fromBit, false);
-            vector<uint64_t> enPassantMoves = generateEnPassantMoves(fromBit, false);
-            legalMoves.insert(legalMoves.end(), enPassantMoves.begin(), enPassantMoves.end());
-        } else if (blackKnights & fromBit) legalMoves = generateKnightMoves(fromBit, false);
+        if (blackPawns & fromBit) legalMoves = generatePawnMoves(fromBit, false);
+        else if (blackKnights & fromBit) legalMoves = generateKnightMoves(fromBit, false);
         else if (blackBishops & fromBit) legalMoves = generateBishopMoves(fromBit, false);
         else if (blackRooks & fromBit) legalMoves = generateRookMoves(fromBit, false);
         else if (blackQueens & fromBit) legalMoves = generateQueenMoves(fromBit, false);
         else if (blackKing & fromBit) legalMoves = generateKingMoves(fromBit, false);
     }
 
-    // Check if the move is in the list of legal moves
+    // Debugging legal moves
+    cout << "Legal moves for " << squareToNotation(fromBit) << ": ";
+    for (uint64_t move : legalMoves) {
+        cout << squareToNotation(move) << " ";
+    }
+    cout << endl;
+
     if (find(legalMoves.begin(), legalMoves.end(), toBit) == legalMoves.end()) {
-        cout << "Illegal move for the piece. Try again.\n";
+        cout << "Move is not in the list of legal moves. Illegal.\n";
         return false;
     }
 
-    // Check if move is legal regarding checks
+    // King safety check
     if (!isMoveLegal(fromBit, toBit, isWhiteTurn)) {
-        cout << "Move leaves the king in check. Try again.\n";
+        cout << "Move leaves the king in check. Illegal.\n";
         return false;
     }
 
-    // Apply the move if legal
+    // Apply the move
+    cout << "Move is valid. Applying move.\n";
     if (isWhiteTurn) {
         whitePieces ^= fromBit | toBit;
         allPieces = whitePieces | blackPieces;
 
-        // Update specific white piece bitboards
-        if (whitePawns & fromBit) { whitePawns ^= fromBit | toBit; }
-        else if (whiteKnights & fromBit) { whiteKnights ^= fromBit | toBit; }
-        else if (whiteBishops & fromBit) { whiteBishops ^= fromBit | toBit; }
-        else if (whiteRooks & fromBit) { whiteRooks ^= fromBit | toBit; }
-        else if (whiteQueens & fromBit) { whiteQueens ^= fromBit | toBit; }
-        else if (whiteKing & fromBit) { whiteKing ^= fromBit | toBit; }
+        if (whitePawns & fromBit) whitePawns ^= fromBit | toBit;
+        else if (whiteKnights & fromBit) whiteKnights ^= fromBit | toBit;
+        else if (whiteBishops & fromBit) whiteBishops ^= fromBit | toBit;
+        else if (whiteRooks & fromBit) whiteRooks ^= fromBit | toBit;
+        else if (whiteQueens & fromBit) whiteQueens ^= fromBit | toBit;
+        else if (whiteKing & fromBit) whiteKing ^= fromBit | toBit;
     } else {
         blackPieces ^= fromBit | toBit;
         allPieces = whitePieces | blackPieces;
 
-        // Update specific black piece bitboards
-        if (blackPawns & fromBit) { blackPawns ^= fromBit | toBit; }
-        else if (blackKnights & fromBit) { blackKnights ^= fromBit | toBit; }
-        else if (blackBishops & fromBit) { blackBishops ^= fromBit | toBit; }
-        else if (blackRooks & fromBit) { blackRooks ^= fromBit | toBit; }
-        else if (blackQueens & fromBit) { blackQueens ^= fromBit | toBit; }
-        else if (blackKing & fromBit) { blackKing ^= fromBit | toBit; }
-    }
-
-    // Handle en passant target square update
-    if ((whitePawns & toBit) && abs(fromSquare - toSquare) == 16) {
-        enPassantTarget = isWhiteTurn ? (1ULL << (toSquare - 8)) : (1ULL << (toSquare + 8));
-    } else {
-        enPassantTarget = 0;
+        if (blackPawns & fromBit) blackPawns ^= fromBit | toBit;
+        else if (blackKnights & fromBit) blackKnights ^= fromBit | toBit;
+        else if (blackBishops & fromBit) blackBishops ^= fromBit | toBit;
+        else if (blackRooks & fromBit) blackRooks ^= fromBit | toBit;
+        else if (blackQueens & fromBit) blackQueens ^= fromBit | toBit;
+        else if (blackKing & fromBit) blackKing ^= fromBit | toBit;
     }
 
     return true;
 }
+
 
 // Evaluate the current position
 int evaluatePosition() {
@@ -548,27 +555,33 @@ int evaluatePosition() {
     const int QUEEN_VALUE = 900;
     const int KING_VALUE = 20000;
 
-    // Calculate White's material score
-    int whiteScore = 0;
-    whiteScore += __builtin_popcountll(whitePawns) * PAWN_VALUE;
-    whiteScore += __builtin_popcountll(whiteKnights) * KNIGHT_VALUE;
-    whiteScore += __builtin_popcountll(whiteBishops) * BISHOP_VALUE;
-    whiteScore += __builtin_popcountll(whiteRooks) * ROOK_VALUE;
-    whiteScore += __builtin_popcountll(whiteQueens) * QUEEN_VALUE;
-    whiteScore += __builtin_popcountll(whiteKing) * KING_VALUE;
+    // Positional bonuses
+    const int CENTER_CONTROL = 20; // Bonus for controlling central squares
+    const uint64_t CENTER_MASK = 0x0000001818000000ULL;
 
-    // Calculate Black's material score
-    int blackScore = 0;
-    blackScore += __builtin_popcountll(blackPawns) * PAWN_VALUE;
-    blackScore += __builtin_popcountll(blackKnights) * KNIGHT_VALUE;
-    blackScore += __builtin_popcountll(blackBishops) * BISHOP_VALUE;
-    blackScore += __builtin_popcountll(blackRooks) * ROOK_VALUE;
-    blackScore += __builtin_popcountll(blackQueens) * QUEEN_VALUE;
-    blackScore += __builtin_popcountll(blackKing) * KING_VALUE;
+    // Calculate material score
+    int whiteScore = __builtin_popcountll(whitePawns) * PAWN_VALUE +
+                     __builtin_popcountll(whiteKnights) * KNIGHT_VALUE +
+                     __builtin_popcountll(whiteBishops) * BISHOP_VALUE +
+                     __builtin_popcountll(whiteRooks) * ROOK_VALUE +
+                     __builtin_popcountll(whiteQueens) * QUEEN_VALUE +
+                     __builtin_popcountll(whiteKing) * KING_VALUE;
 
-    // Final evaluation: Positive score favors White, negative favors Black
+    int blackScore = __builtin_popcountll(blackPawns) * PAWN_VALUE +
+                     __builtin_popcountll(blackKnights) * KNIGHT_VALUE +
+                     __builtin_popcountll(blackBishops) * BISHOP_VALUE +
+                     __builtin_popcountll(blackRooks) * ROOK_VALUE +
+                     __builtin_popcountll(blackQueens) * QUEEN_VALUE +
+                     __builtin_popcountll(blackKing) * KING_VALUE;
+
+    // Add bonuses for center control
+    whiteScore += __builtin_popcountll(whitePieces & CENTER_MASK) * CENTER_CONTROL;
+    blackScore += __builtin_popcountll(blackPieces & CENTER_MASK) * CENTER_CONTROL;
+
+    // Return evaluation
     return whiteScore - blackScore;
 }
+
 
 
 // Define a structure to hold board state information
@@ -766,10 +779,6 @@ int minimax(int depth, bool isMaximizingPlayer, int alpha, int beta, bool isWhit
     return bestEval;
 }
 
-
-
-
-
 struct Move {
     uint64_t from;
     uint64_t to;
@@ -811,16 +820,17 @@ Move findBestMove(bool isWhiteTurn, int depth = 4) {
             int eval = minimax(depth - 1, !isWhiteTurn, std::numeric_limits<int>::min(), std::numeric_limits<int>::max(), !isWhiteTurn);
             undoMove();
 
+            cout << "Move from " << squareToNotation(piece) << " to " << squareToNotation(move)
+                 << " evaluated at " << eval << endl;
+
             if ((isWhiteTurn && eval > bestMove.evaluation) || (!isWhiteTurn && eval < bestMove.evaluation)) {
                 bestMove = {piece, move, eval};
             }
         }
     }
 
-    // Ensure bestMove is valid
-    if (bestMove.from == 0 && bestMove.to == 0) {
-        cout << "No legal moves available for " << (isWhiteTurn ? "White" : "Black") << ".\n";
-    }
+    cout << "Best move selected: from " << squareToNotation(bestMove.from) << " to " << squareToNotation(bestMove.to)
+         << " with evaluation " << bestMove.evaluation << endl;
     return bestMove;
 }
 
@@ -864,14 +874,19 @@ void computerGameLoop(bool humanPlaysWhite) {
             // Computer move
             cout << "Computer is thinking...\n";
             Move bestMove = findBestMove(isWhiteTurn);
+            if (bestMove.from == 0 && bestMove.to == 0) {
+                cout << "No legal moves available for AI. Game over.\n";
+                break;
+            }
             makeMove(bestMove.from, bestMove.to, isWhiteTurn);
-            cout << "Computer evaluation: " << bestMove.evaluation << endl;
+            cout << "Computer's move: Evaluation = " << bestMove.evaluation << endl;
         }
 
         printBoardForPlayers();
         isWhiteTurn = !isWhiteTurn;
     }
 }
+
 
 // Game loop for human vs. human gameplay
 void gameLoop() {
